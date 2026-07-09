@@ -49,7 +49,8 @@ async def signin(request: Request):
 
 @router.get("/signin/google")
 async def signin_google(request: Request):
-    redirect_uri = f"{settings.site_url}/api/auth/callback/google"
+    # Callback goes through the frontend proxy so users stay on the app domain.
+    redirect_uri = f"{settings.frontend_url.rstrip('/')}/api/auth/callback/google"
     return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
