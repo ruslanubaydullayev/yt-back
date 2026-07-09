@@ -1,5 +1,6 @@
 import secrets
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 from authlib.integrations.starlette_client import OAuth
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -25,6 +26,20 @@ oauth.register(
     server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
     client_kwargs={"scope": "openid email profile"},
 )
+
+
+def _session_cookie_kwargs() -> dict:
+    """Cross-origin frontend (Vercel) needs SameSite=None on the API domain."""
+    api_host = urlparse(settings.site_url).netloc
+    frontend_host = urlparse(settings.frontend_url).netloc
+    cross_origin = api_host != frontend_host
+    secure = settings.site_url.startswith("https") or cross_origin
+    return {
+        "httponly": True,
+        "max_age": SESSION_MAX_AGE,
+        "secure": secure,
+        "samesite": "none" if cross_origin else "lax",
+    }
 
 
 @router.get("/signin")
@@ -91,15 +106,8 @@ async def callback_google(request: Request, db: AsyncSession = Depends(get_db)):
         send_welcome_email(user.email, user.name)
 
     jwt_token = create_session_token(user.id)
-    response = RedirectResponse(url=f"{settings.frontend_url}/dashboard?signInCallback=true")
-    response.set_cookie(
-        key=SESSION_COOKIE,
-        value=jwt_token,
-        max_age=SESSION_MAX_AGE,
-        httponly=True,
-        samesite="lax",
-        secure=settings.site_url.startswith("https"),
-    )
+    response = RedirectResponse(url=f"{settings.frontend_url}/create?signInCallback=true")
+    response.set_cookie(key=SESSION_COOKIE, value=jwt_token, **_session_cookie_kwargs())
     return response
 
 
@@ -120,5 +128,5 @@ async def get_session(user: User | None = Depends(optional_user)):
 
 @router.post("/signout")
 async def signout(response: Response):
-    response.delete_cookie(SESSION_COOKIE)
+    response.delete_cookie(SESSION_COOKIE, **_session_cookie_kwargs())
     return {"url": settings.frontend_url}
