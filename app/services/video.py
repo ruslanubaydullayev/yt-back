@@ -285,7 +285,7 @@ async def _process_render(
             job = result.scalar_one()
             job.status = "done"
             job.output_path = output_path
-            job.ready_at = datetime.now(timezone.utc)
+            job.ready_at = datetime.now(timezone.utc).replace(tzinfo=None)
             await session.commit()
     except Exception as e:
         logger.exception("Render job %s failed", job_id)
