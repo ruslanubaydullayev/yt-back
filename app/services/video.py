@@ -130,61 +130,113 @@ async def upload_clip(
 
 
 def _escape_drawtext(text: str) -> str:
-    return text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    return (
+        text.replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace("%", "\\%")
+    )
+
+
+def _font_param() -> str:
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    ):
+        if os.path.exists(path):
+            return f"fontfile={path}:"
+    return ""
+
+
+def _hex_color(color: str) -> str:
+    return color.lstrip("#")
+
+
+def _build_overlay_filters(
+    title: str,
+    total: int,
+    current_rank: int,
+    rank_labels: dict[int, str],
+    input_label: str = "bg",
+) -> tuple[str, str]:
+    font = _font_param()
+    filters: list[str] = []
+    current = input_label
+
+    x = 30
+    for i, word in enumerate(title.split()[:10]):
+        color = _hex_color(PALETTE[i % len(PALETTE)])
+        escaped = _escape_drawtext(word)
+        out = f"hdr{i}"
+        filters.append(
+            f"[{current}]drawtext={font}text='{escaped}':fontcolor=0x{color}:"
+            f"fontsize=40:borderw=4:bordercolor=black@0.9:x={x}:y=45[{out}]"
+        )
+        x += len(word) * 24 + 14
+        current = out
+
+    list_top = 200
+    line_height = min(130, (1550 - list_top) // max(total, 1))
+
+    for rank in range(1, total + 1):
+        color = _hex_color(PALETTE[(rank - 1) % len(PALETTE)])
+        y = list_top + (rank - 1) * line_height
+        num_text = _escape_drawtext(f"{rank}.")
+        out = f"rnk{rank}"
+        filters.append(
+            f"[{current}]drawtext={font}text='{num_text}':fontcolor=0x{color}:"
+            f"fontsize=80:borderw=5:bordercolor=black@0.9:x=40:y={y}[{out}]"
+        )
+        current = out
+
+        if rank >= current_rank:
+            label = _escape_drawtext(rank_labels.get(rank, "")[:35])
+            if label:
+                out = f"lbl{rank}"
+                filters.append(
+                    f"[{current}]drawtext={font}text='{label}':fontcolor=white:"
+                    f"fontsize=60:borderw=4:bordercolor=black@0.9:x=140:y={y}[{out}]"
+                )
+                current = out
+
+    return ";".join(filters), current
 
 
 def _render_segment(
     clip_path: str,
-    rank: int,
-    label: str,
-    color: str,
+    current_rank: int,
+    rank_labels: dict[int, str],
+    title: str,
+    total: int,
     output_path: str,
     duration: float = 5.0,
 ) -> None:
     clip_duration = _get_duration(clip_path) or duration
     seg_duration = min(clip_duration, settings.max_clip_duration_seconds, duration)
 
-    color_hex = color.lstrip("#")
-    badge_text = f"#{rank}"
-    label_text = _escape_drawtext(label[:40])
+    overlay_filters, final_label = _build_overlay_filters(
+        title, total, current_rank, rank_labels
+    )
 
     filter_complex = (
         f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
         f"crop=1080:1920,setsar=1,trim=0:{seg_duration},setpts=PTS-STARTPTS[bg];"
-        f"color=c=0x{color_hex}:s=120x120,format=rgba,"
-        f"geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='if(lt(hypot(X-60,Y-60),55),255,0)'[badge];"
-        f"[bg][badge]overlay=40:40[withbadge];"
-        f"[withbadge]drawtext=text='{badge_text}':fontsize=48:fontcolor=black:"
-        f"x=70:y=70[ranked];"
-        f"[ranked]drawtext=text='{label_text}':fontsize=36:fontcolor=white:"
-        f"x=40:y=180:box=1:boxcolor=black@0.5:boxborderw=8"
+        f"{overlay_filters}"
     )
 
     cmd = [
         "ffmpeg", "-y", "-i", clip_path,
         "-filter_complex", filter_complex,
+        "-map", f"[{final_label}]",
         "-t", str(seg_duration),
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p",
         "-an", output_path,
     ]
-    subprocess.run(cmd, capture_output=True, check=True)
-
-
-def _render_title_screen(title: str, output_path: str, duration: float = 3.0) -> None:
-    title_text = _escape_drawtext(title[:40])
-    filter_str = (
-        f"color=c=black:s=1080x1920:d={duration},"
-        f"drawtext=text='{title_text}':fontsize=64:fontcolor=white:"
-        f"x=(w-text_w)/2:y=(h-text_h)/2"
-    )
-    cmd = [
-        "ffmpeg", "-y",
-        "-f", "lavfi", "-i", filter_str,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
-        "-t", str(duration),
-        output_path,
-    ]
-    subprocess.run(cmd, capture_output=True, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        logger.error("ffmpeg segment failed: %s", result.stderr)
+        raise RuntimeError(f"ffmpeg failed for rank {current_rank}")
 
 
 def _concat_segments(segment_paths: list[str], output_path: str) -> None:
@@ -195,10 +247,17 @@ def _concat_segments(segment_paths: list[str], output_path: str) -> None:
 
     cmd = [
         "ffmpeg", "-y", "-f", "concat", "-safe", "0",
-        "-i", list_file, "-c", "copy", output_path,
+        "-i", list_file,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-an", output_path,
     ]
-    subprocess.run(cmd, capture_output=True, check=True)
+    result = subprocess.run(cmd, capture_output=True, text=True)
     os.unlink(list_file)
+    if result.returncode != 0:
+        logger.error("ffmpeg concat failed: %s", result.stderr)
+        raise RuntimeError("ffmpeg concat failed")
 
 
 def _run_render(job_id: str, title: str, items: list[dict]) -> str:
@@ -206,20 +265,24 @@ def _run_render(job_id: str, title: str, items: list[dict]) -> str:
     work_dir = RENDERS_DIR / job_id
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    by_order = sorted(items, key=lambda x: x["order"])
+    total = len(by_order)
+    rank_labels = {i + 1: by_order[i]["label"] for i in range(total)}
+
     segments: list[str] = []
+    play_order = sorted(items, key=lambda x: x["order"], reverse=True)
 
-    title_seg = str(work_dir / "title.mp4")
-    _render_title_screen(title, title_seg)
-    segments.append(title_seg)
-
-    sorted_items = sorted(items, key=lambda x: x["order"], reverse=True)
-    total = len(sorted_items)
-
-    for idx, item in enumerate(sorted_items):
-        rank = total - idx
-        color = PALETTE[(rank - 1) % len(PALETTE)]
-        seg_path = str(work_dir / f"seg_{rank}.mp4")
-        _render_segment(item["clip_path"], rank, item["label"], color, seg_path)
+    for idx, item in enumerate(play_order):
+        current_rank = total - idx
+        seg_path = str(work_dir / f"seg_{current_rank}.mp4")
+        _render_segment(
+            item["clip_path"],
+            current_rank,
+            rank_labels,
+            title,
+            total,
+            seg_path,
+        )
         segments.append(seg_path)
 
     output_path = str(RENDERS_DIR / f"{job_id}.mp4")

@@ -78,4 +78,9 @@ async def render_file(job_id: str, db: AsyncSession = Depends(get_db)):
     job = await get_render_job(db, job_id)
     if not job or job.status != "done" or not job.output_path:
         raise HTTPException(status_code=404, detail="File not found")
-    return FileResponse(job.output_path, media_type="video/mp4", filename=f"{job_id}.mp4")
+    return FileResponse(
+        job.output_path,
+        media_type="video/mp4",
+        filename=f"{job_id}.mp4",
+        content_disposition_type="inline",
+    )
