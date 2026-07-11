@@ -68,7 +68,8 @@ async def render_download(job_id: str, db: AsyncSession = Depends(get_db)):
     if job.status != "done":
         raise HTTPException(status_code=409, detail="Render not ready yet")
 
-    url = f"{settings.site_url}/api/render/{job_id}/file"
+    # Relative URL so the frontend proxy (www.ytshort.site/api/**) serves the file.
+    url = f"/api/render/{job_id}/file"
     return RenderDownloadResponse(url=url)
 
 
