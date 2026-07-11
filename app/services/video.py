@@ -153,7 +153,14 @@ def _hex_color(color: str) -> str:
 
 
 def _estimate_text_width(text: str, font_size: int) -> int:
-    return int(len(text) * font_size * 0.55)
+    return int(len(text) * font_size * 0.6)
+
+
+def _fit_font_size(text: str, max_width: int, max_size: int, min_size: int) -> int:
+    for size in range(max_size, min_size - 1, -2):
+        if _estimate_text_width(text, size) <= max_width:
+            return size
+    return min_size
 
 
 def _build_overlay_filters(
@@ -174,62 +181,56 @@ def _build_overlay_filters(
     )
     current = out
 
-    words = title.upper().split()[:10]
-    font_size = 42
-    char_w = 26
-    space_w = 22
+    display_title = title.strip()[:80]
+    words = display_title.split()
     if words:
-        total_w = sum(len(w) * char_w for w in words) + (len(words) - 1) * space_w
+        full_line = " ".join(words)
+        title_size = _fit_font_size(full_line, 1020, 42, 18)
+        total_w = _estimate_text_width(full_line, title_size)
         x = max(20, (1080 - total_w) // 2)
         y = 48
         for i, word in enumerate(words):
+            segment = word if i == len(words) - 1 else f"{word} "
             color = _hex_color(PALETTE[i % len(PALETTE)])
-            escaped = _escape_drawtext(word)
+            escaped = _escape_drawtext(segment)
             out = f"hdr{i}"
             filters.append(
                 f"[{current}]drawtext={font}text='{escaped}':fontcolor=0x{color}:"
-                f"fontsize={font_size}:borderw=4:bordercolor=black@0.9:x={x}:y={y}[{out}]"
+                f"fontsize={title_size}:borderw=4:bordercolor=black@0.9:x={x}:y={y}[{out}]"
             )
             current = out
-            x += len(word) * char_w + space_w
+            x += _estimate_text_width(segment, title_size)
 
     line_height = min(130, 900 // max(total, 1))
     block_height = total * line_height
     list_top = (1920 - block_height) // 2
+    left_x = 40
     num_size = 80
-    label_size = 60
+    max_label_width = 1080 - left_x - 120
 
     for rank in range(1, total + 1):
         color = _hex_color(PALETTE[(rank - 1) % len(PALETTE)])
         y = list_top + (rank - 1) * line_height
         num_text = _escape_drawtext(f"{rank}.")
-        label = _escape_drawtext(rank_labels.get(rank, "")[:35]) if rank >= current_rank else ""
+        raw_label = rank_labels.get(rank, "") if rank >= current_rank else ""
 
-        if label:
-            gap = _estimate_text_width(" ", num_size)
+        out = f"rnk{rank}"
+        filters.append(
+            f"[{current}]drawtext={font}text='{num_text}':fontcolor=0x{color}:"
+            f"fontsize={num_size}:borderw=5:bordercolor=black@0.9:x={left_x}:y={y}[{out}]"
+        )
+        current = out
+
+        if raw_label:
             num_w = _estimate_text_width(f"{rank}.", num_size)
-            label_w = _estimate_text_width(rank_labels.get(rank, "")[:35], label_size)
-            line_w = num_w + gap + label_w
-            start_x = max(20, (1080 - line_w) // 2)
-            out = f"rnk{rank}"
-            filters.append(
-                f"[{current}]drawtext={font}text='{num_text}':fontcolor=0x{color}:"
-                f"fontsize={num_size}:borderw=5:bordercolor=black@0.9:x={start_x}:y={y}[{out}]"
-            )
-            current = out
+            gap = _estimate_text_width(" ", num_size)
+            label_size = _fit_font_size(raw_label, max_label_width - num_w - gap, 60, 22)
+            label = _escape_drawtext(raw_label)
             out = f"lbl{rank}"
             filters.append(
                 f"[{current}]drawtext={font}text='{label}':fontcolor=white:"
                 f"fontsize={label_size}:borderw=4:bordercolor=black@0.9:"
-                f"x={start_x + num_w + gap}:y={y + 8}[{out}]"
-            )
-            current = out
-        else:
-            start_x = max(20, (1080 - _estimate_text_width(f"{rank}.", num_size)) // 2)
-            out = f"rnk{rank}"
-            filters.append(
-                f"[{current}]drawtext={font}text='{num_text}':fontcolor=0x{color}:"
-                f"fontsize={num_size}:borderw=5:bordercolor=black@0.9:x={start_x}:y={y}[{out}]"
+                f"x={left_x + num_w + gap}:y={y + 8}[{out}]"
             )
             current = out
 
