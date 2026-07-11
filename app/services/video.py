@@ -152,6 +152,10 @@ def _hex_color(color: str) -> str:
     return color.lstrip("#")
 
 
+def _estimate_text_width(text: str, font_size: int) -> int:
+    return int(len(text) * font_size * 0.55)
+
+
 def _build_overlay_filters(
     title: str,
     total: int,
@@ -163,41 +167,71 @@ def _build_overlay_filters(
     filters: list[str] = []
     current = input_label
 
-    x = 30
-    for i, word in enumerate(title.split()[:10]):
-        color = _hex_color(PALETTE[i % len(PALETTE)])
-        escaped = _escape_drawtext(word)
-        out = f"hdr{i}"
-        filters.append(
-            f"[{current}]drawtext={font}text='{escaped}':fontcolor=0x{color}:"
-            f"fontsize=40:borderw=4:bordercolor=black@0.9:x={x}:y=45[{out}]"
-        )
-        x += len(word) * 24 + 14
-        current = out
+    header_h = 140
+    out = "hdrbar"
+    filters.append(
+        f"[{current}]drawbox=x=0:y=0:w=iw:h={header_h}:color=black@0.9:t=fill[{out}]"
+    )
+    current = out
 
-    list_top = 200
-    line_height = min(130, (1550 - list_top) // max(total, 1))
+    words = title.upper().split()[:10]
+    font_size = 42
+    char_w = 26
+    space_w = 22
+    if words:
+        total_w = sum(len(w) * char_w for w in words) + (len(words) - 1) * space_w
+        x = max(20, (1080 - total_w) // 2)
+        y = 48
+        for i, word in enumerate(words):
+            color = _hex_color(PALETTE[i % len(PALETTE)])
+            escaped = _escape_drawtext(word)
+            out = f"hdr{i}"
+            filters.append(
+                f"[{current}]drawtext={font}text='{escaped}':fontcolor=0x{color}:"
+                f"fontsize={font_size}:borderw=4:bordercolor=black@0.9:x={x}:y={y}[{out}]"
+            )
+            current = out
+            x += len(word) * char_w + space_w
+
+    line_height = min(130, 900 // max(total, 1))
+    block_height = total * line_height
+    list_top = (1920 - block_height) // 2
+    num_size = 80
+    label_size = 60
 
     for rank in range(1, total + 1):
         color = _hex_color(PALETTE[(rank - 1) % len(PALETTE)])
         y = list_top + (rank - 1) * line_height
         num_text = _escape_drawtext(f"{rank}.")
-        out = f"rnk{rank}"
-        filters.append(
-            f"[{current}]drawtext={font}text='{num_text}':fontcolor=0x{color}:"
-            f"fontsize=80:borderw=5:bordercolor=black@0.9:x=40:y={y}[{out}]"
-        )
-        current = out
+        label = _escape_drawtext(rank_labels.get(rank, "")[:35]) if rank >= current_rank else ""
 
-        if rank >= current_rank:
-            label = _escape_drawtext(rank_labels.get(rank, "")[:35])
-            if label:
-                out = f"lbl{rank}"
-                filters.append(
-                    f"[{current}]drawtext={font}text='{label}':fontcolor=white:"
-                    f"fontsize=60:borderw=4:bordercolor=black@0.9:x=140:y={y}[{out}]"
-                )
-                current = out
+        if label:
+            gap = _estimate_text_width(" ", num_size)
+            num_w = _estimate_text_width(f"{rank}.", num_size)
+            label_w = _estimate_text_width(rank_labels.get(rank, "")[:35], label_size)
+            line_w = num_w + gap + label_w
+            start_x = max(20, (1080 - line_w) // 2)
+            out = f"rnk{rank}"
+            filters.append(
+                f"[{current}]drawtext={font}text='{num_text}':fontcolor=0x{color}:"
+                f"fontsize={num_size}:borderw=5:bordercolor=black@0.9:x={start_x}:y={y}[{out}]"
+            )
+            current = out
+            out = f"lbl{rank}"
+            filters.append(
+                f"[{current}]drawtext={font}text='{label}':fontcolor=white:"
+                f"fontsize={label_size}:borderw=4:bordercolor=black@0.9:"
+                f"x={start_x + num_w + gap}:y={y + 8}[{out}]"
+            )
+            current = out
+        else:
+            start_x = max(20, (1080 - _estimate_text_width(f"{rank}.", num_size)) // 2)
+            out = f"rnk{rank}"
+            filters.append(
+                f"[{current}]drawtext={font}text='{num_text}':fontcolor=0x{color}:"
+                f"fontsize={num_size}:borderw=5:bordercolor=black@0.9:x={start_x}:y={y}[{out}]"
+            )
+            current = out
 
     return ";".join(filters), current
 
