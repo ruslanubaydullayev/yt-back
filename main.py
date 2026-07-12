@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -8,6 +9,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.config import settings
 from app.database import init_db
 from app.routers import auth, clips, render, users
+from app.services.video import ensure_dirs
 
 logging.basicConfig(level=logging.INFO)
 
@@ -15,6 +17,7 @@ logging.basicConfig(level=logging.INFO)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await asyncio.to_thread(ensure_dirs)
     yield
 
 

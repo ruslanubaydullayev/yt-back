@@ -6,6 +6,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
+import aiofiles
 import yt_dlp
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,6 +28,12 @@ RENDERS_DIR = Path(settings.data_dir) / "renders"
 def ensure_dirs() -> None:
     CLIPS_DIR.mkdir(parents=True, exist_ok=True)
     RENDERS_DIR.mkdir(parents=True, exist_ok=True)
+    probe = CLIPS_DIR / ".write_probe"
+    try:
+        probe.write_text("")
+        probe.unlink()
+    except OSError as exc:
+        raise RuntimeError(f"Clips directory is not writable: {CLIPS_DIR}") from exc
 
 
 def _get_duration(file_path: str) -> float | None:
@@ -97,19 +104,32 @@ async def import_clip(
 
 async def upload_clip(
     db: AsyncSession,
-    file_data: bytes,
+    file,
     filename: str,
     user_id: str | None = None,
 ) -> Clip:
     ensure_dirs()
     max_bytes = settings.max_upload_mb * 1024 * 1024
-    if len(file_data) > max_bytes:
-        raise ValueError(f"File exceeds {settings.max_upload_mb}MB limit")
 
     clip_id = str(uuid.uuid4())
     ext = filename.rsplit(".", 1)[-1] if "." in filename else "mp4"
     file_path = CLIPS_DIR / f"{clip_id}.{ext}"
-    file_path.write_bytes(file_data)
+
+    size = 0
+    try:
+        async with aiofiles.open(file_path, "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                size += len(chunk)
+                if size > max_bytes:
+                    raise ValueError(f"File exceeds {settings.max_upload_mb}MB limit")
+                await out.write(chunk)
+    except Exception:
+        file_path.unlink(missing_ok=True)
+        raise
+
+    if size == 0:
+        file_path.unlink(missing_ok=True)
+        raise ValueError("File is empty")
 
     duration = await asyncio.to_thread(_get_duration, str(file_path))
     if duration and duration > settings.max_clip_duration_seconds:

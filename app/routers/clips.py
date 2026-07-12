@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -6,6 +8,8 @@ from app.deps import optional_user
 from app.models import User
 from app.schemas import ClipImportRequest, ClipImportResponse, ClipUploadResponse
 from app.services.video import import_clip, upload_clip
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/clips", tags=["clips"])
 
@@ -36,13 +40,16 @@ async def clip_upload(
     db: AsyncSession = Depends(get_db),
     user: User | None = Depends(optional_user),
 ):
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="file is required")
-
-    data = await file.read()
     try:
-        clip = await upload_clip(db, data, file.filename, user.id if user else None)
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="file is required")
+
+        clip = await upload_clip(db, file, file.filename, user.id if user else None)
+        return ClipUploadResponse(clipId=clip.id)
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-    return ClipUploadResponse(clipId=clip.id)
+    except Exception as e:
+        logger.exception("Clip upload failed")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {e}")
